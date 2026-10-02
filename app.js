@@ -1,7 +1,7 @@
 /* AI 來電 練英文 — web version. UI, call flow, settings. */
 "use strict";
 
-const VERSION = "1.0";
+const VERSION = "1.1";
 const PAGE_URL = location.origin + location.pathname;
 
 // ================================================================ helpers
@@ -500,7 +500,7 @@ function saveCall(c) {
     const rec = { ts: c.startMs, durationSec: dur, persona: c.persona.name, topic: c.topic.label, level: c.level, transcript: text, feedback: "", seen: false };
     Calls.add(rec);
     if (userLines.length >= 2 && userWords >= 12 && P.key) {
-      geminiGenerate(P.key, ["gemini-2.5-flash", "gemini-2.0-flash"], FEEDBACK_PROMPT + "\n" + text, true)
+      geminiGenerate(P.key, ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash"], FEEDBACK_PROMPT + "\n" + text, true)
         .then(t => {
           t = t.trim().replace(/^```json/, "").replace(/^```/, "").replace(/```$/, "").trim();
           JSON.parse(t);
@@ -689,7 +689,7 @@ function buildSystem(root) {
     if (!P.key) { result.textContent = "還沒有填 key"; return; }
     result.textContent = "測試中…";
     try {
-      const reply = await geminiGenerate(P.key, ["gemini-2.5-flash", "gemini-2.0-flash"], "Reply with the single word: OK", false);
+      const reply = await geminiGenerate(P.key, ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash"], "Reply with the single word: OK", false);
       let live = "";
       try { const ms = await new LiveSession({ apiKey: P.key }).discover(); live = ms.length ? "\n即時語音：可用（" + ms[0] + "）" : "\n即時語音：這組 key 找不到支援的模型"; }
       catch (e) { live = "\n即時語音：查詢失敗"; }

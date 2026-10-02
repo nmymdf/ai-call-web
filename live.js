@@ -273,9 +273,33 @@ class LiveSession {
 }
 
 /** One-shot request used for the after-call tip and the connection test. */
+let _textModelsCache = null;
+/** Ask the key which text models exist right now (Google retires old ones), newest flash first. */
+async function discoverTextModels(apiKey) {
+  if (_textModelsCache) return _textModelsCache;
+  const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key=" + encodeURIComponent(apiKey));
+  if (!r.ok) throw new Error("HTTP " + r.status + " " + (await r.text()).slice(0, 200));
+  const j = await r.json();
+  const found = [];
+  for (const m of (j.models || [])) {
+    if (!(m.supportedGenerationMethods || []).includes("generateContent")) continue;
+    const name = m.name.replace(/^models\//, "");
+    if (!/flash/.test(name) || /tts|live|image|audio|embed|thinking|lite|robotics|computer|learnlm|exp/.test(name)) continue;
+    const ver = parseFloat((name.match(/(\d+(?:\.\d+)?)/) || [0, "0"])[1]) || 0;
+    found.push({ s: ver - (/preview/.test(name) ? 0.5 : 0), name });
+  }
+  found.sort((a, b) => b.s - a.s);
+  const list = found.map(x => x.name).slice(0, 4);
+  if (list.length) _textModelsCache = list;
+  return list;
+}
+
 async function geminiGenerate(apiKey, models, text, json) {
   let last = null;
-  for (const m of models) {
+  let list = [];
+  try { list = await discoverTextModels(apiKey); } catch (e) { last = e; }
+  for (const m of models) if (!list.includes(m)) list.push(m);
+  for (const m of list) {
     try {
       const body = { contents: [{ parts: [{ text }] }] };
       if (json) body.generationConfig = { responseMimeType: "application/json", temperature: 0.4 };

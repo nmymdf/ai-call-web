@@ -309,6 +309,44 @@ function levelRule(level) {
   }
 }
 
+/** Shuffle bag: every item is used once per round, and a new round never starts with the last item used. */
+const Bag = {
+  next(key, pool) {
+    if (!pool.length) return "";
+    if (pool.length === 1) return pool[0];
+    let st = {};
+    try { st = JSON.parse(localStorage.getItem("aicall_bag") || "{}"); } catch (e) {}
+    const e = st[key] || { q: [], last: "" };
+    let q = (e.q || []).filter(x => pool.includes(x));
+    if (!q.length) {
+      q = pool.slice();
+      for (let i = q.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [q[i], q[j]] = [q[j], q[i]]; }
+      if (q[0] === e.last) { const j = 1 + Math.floor(Math.random() * (q.length - 1)); [q[0], q[j]] = [q[j], q[0]]; }
+    }
+    const pick = q.shift();
+    st[key] = { q, last: pick };
+    try { localStorage.setItem("aicall_bag", JSON.stringify(st)); } catch (e2) {}
+    return pick;
+  }
+};
+
+/** Like resolveTopic, but "random" goes through the shuffle bag so every topic gets a turn. */
+function drawTopic(id, customs) {
+  if ((customs || []).some(t => t.id === id) || TOPICS.some(t => t.id === id)) return resolveTopic(id, customs);
+  const pick = Bag.next("topic", TOPICS.map(t => t.id));
+  return TOPICS.find(t => t.id === pick) || TOPICS[0];
+}
+function drawPersona(id) {
+  const f = PERSONAS.find(p => p.id === id);
+  if (f) return f;
+  const pick = Bag.next("persona", PERSONAS.map(p => p.id));
+  return PERSONAS.find(p => p.id === pick) || PERSONAS[0];
+}
+function drawOpener(topic) {
+  const idx = Bag.next("opener:" + topic.id, topic.openers.map((_, i) => String(i)));
+  return topic.openers[parseInt(idx, 10) || 0] || topic.openers[0];
+}
+
 function resolveTopic(id, customs) {
   const c = (customs || []).find(t => t.id === id);
   if (c) {
@@ -326,7 +364,7 @@ function resolveTopic(id, customs) {
   return TOPICS.find(t => t.id === id) || TOPICS[Math.floor(Math.random() * TOPICS.length)];
 }
 
-function systemPrompt(topic, style, userName, level, callerName) {
+function systemPrompt(topic, style, userName, level, callerName, speed) {
   const name = (userName || "").trim();
   const nameBlock = name
     ? "\nThe person you are talking to is named " + name + ". Say their name once when you first greet them. After that use it only rarely: at most once in about every ten of your replies, and only when it really fits (for example comforting them or saying goodbye). Never use it in two replies in a row, and never tack it on the end of a sentence out of habit. Most of your replies must not contain their name at all.\n"
@@ -336,9 +374,23 @@ function systemPrompt(topic, style, userName, level, callerName) {
     : "Keep it short: one or two sentences, " + levelWords(level) + " words at most.";
   const styleLine = style === "chatty"
     ? "- Now and then add a tiny, funny or relatable detail about your own day (a coworker, a show, food), but only if it connects to what they said."
-    : topic.id === "story"
-      ? "- Telling a story is the point of this call, so keep the story vivid and easy to follow."
-      : "- Do not invent side stories, jokes about your computer, or unrelated details about your life.";
+    : style === "gentle"
+      ? "- Your tone is extra gentle, calm and encouraging. Often answer something they said well with a few warm, natural words (\"That's a really nice way to say it.\"), be patient when they pause or stumble, never hurry them, and never point out mistakes. Do not invent side stories."
+      : style === "curious"
+        ? "- You are genuinely curious about them and their life. Show interest in their details, and do not invent side stories about yourself."
+        : style === "funny"
+          ? "- Be funny and playful: in many replies add a light joke, a silly exaggeration or a funny comparison, always connected to what they said and always kind (never make fun of their English). Do not invent unrelated side stories."
+          : topic.id === "story"
+            ? "- Telling a story is the point of this call, so keep the story vivid and easy to follow."
+            : "- Do not invent side stories, jokes about your computer, or unrelated details about your life.";
+  const questionLine = style === "curious"
+    ? "In most turns, after a short reaction, ask ONE short follow-up question about what they just said (why, how, what happened next, how they felt) so they keep talking. Never ask two questions at once."
+    : "Ask a question in at most every other turn; in the other turns just share a short comment or opinion and let them continue.";
+  const paceLine = speed === 1
+    ? "\n- SPEAKING SPEED: speak a little slower than normal and pause briefly between phrases, pronouncing every word clearly."
+    : speed === 2
+      ? "\n- SPEAKING SPEED: speak very slowly, one short phrase at a time with clear pauses, and pronounce every word distinctly. Keep your sentences short."
+      : "";
   const text = `
 You are Alex, a real person talking to the user on a phone call. The user is practicing English by chatting with you, but you never mention that. You started the call, so continue naturally from your opening line.
 
@@ -349,8 +401,8 @@ Your personality: warm, upbeat, playful and a little goofy, like a close friend 
 How to sound like a real person:
 - Always answer what they just said first, directly and on topic, with a short natural reaction ("Oh nice!", "Yeah, totally.", "Oh no, that sucks."). Never change the subject suddenly and never ramble.
 - ${length} Spoken English, not written.
-- ${levelRule(level)}
-- Stay inside the scenario and keep ONE clear thread going. Ask a question in at most every other turn; in the other turns just share a short comment or opinion and let them continue.
+- ${levelRule(level)}${paceLine}
+- Stay inside the scenario and keep ONE clear thread going. ${questionLine}
 ${styleLine}
 - Never sound like an assistant: no "How can I help you", no "Great question", no summaries, no lists, no emojis, no stage directions, no markdown. Your words are spoken out loud.
 - Never say you are an AI. Do not correct their grammar unless they ask. If they seem stuck or answer in another language, gently say the same thing again in simpler English.
@@ -364,12 +416,12 @@ const OPENING_CUE = "(The phone was just answered. Say your opening line now.)";
 const OUTGOING_CUE = "(You just picked up the phone because the user is calling you. Answer now.)";
 
 /** Full prompt for a live call, with the extra live-call rules from the Android app. */
-function livePrompt(topic, style, userName, level, persona, outgoing) {
-  const base = systemPrompt(topic, style, userName, level, persona.name);
+function livePrompt(topic, style, userName, level, persona, outgoing, speed) {
+  const base = systemPrompt(topic, style, userName, level, persona.name, speed);
   const slow = level <= 2
     ? " Speak noticeably slower than normal conversation, pause briefly between phrases, and pronounce every word clearly and distinctly, as if talking to an English learner."
     : "";
-  const opener = outgoing ? "Hello?" : topic.openers[Math.floor(Math.random() * topic.openers.length)].split("Alex").join(persona.name);
+  const opener = outgoing ? "Hello?" : drawOpener(topic).split("Alex").join(persona.name);
   return base + slow +
     "\n\nThis is a LIVE phone call and your words are spoken aloud. They may interrupt you; if they do, stop and answer what they said. " +
     (outgoing
@@ -389,4 +441,30 @@ Return ONLY a JSON object with these string keys. Use an empty string when nothi
 Never say how many mistakes they made. Be kind and brief.
 
 Transcript:
+`.trim();
+
+// ---- After the call: the whole conversation is read in parts; only the most serious mistakes are kept.
+const ERRORS_PROMPT = `
+You are an English coach reviewing ONE PART of a spoken practice conversation. "Learner" is a native Chinese speaker practising English; "Partner" is the practice partner (for context only).
+
+Read the WHOLE text from the first line to the last and find the learner's MOST SERIOUS mistakes in it: every one that a native speaker would clearly notice or that could confuse the listener. Do not favour the end of the text over the beginning.
+
+Rate each mistake with "sev":
+- 3 = serious: wrong or missing verb form or tense, subject-verb disagreement in a basic sentence, wrong word order, a missing essential word, a wrong word that changes or blurs the meaning, two structures mixed together.
+- 2 = noticeable but easily understood.
+Do NOT report anything lighter than 2: articles, plural endings, prepositions natives would let pass, contractions, filler words, informal spoken-style grammar, repetition, accent, or anything that could be a speech-recognition error (garbled words, words from other languages, odd fragments). Never "correct" something that is already fine.
+
+For each item: "said" = the learner's exact words copied from the text (the shortest stretch that shows the mistake, at most one sentence); "better" = a corrected, natural version of that same stretch; "why" = one short, kind sentence in Traditional Chinese saying what to change.
+
+Return ONLY JSON: {"errors":[{"said":"","better":"","why":"","sev":3}]} with at most 6 items. Use an empty array if there is nothing serious.
+
+Text:
+`.trim();
+
+const SUMMARY_PROMPT = `
+You are a warm, gentle English coach. Below are the lines a learner (a native Chinese speaker) said during a spoken practice conversation; they were transcribed automatically, so ignore garbled or non-English fragments.
+
+Return ONLY a JSON object: {"praise": one short, genuine, encouraging sentence in Traditional Chinese about something they did well, "word": one useful English word or expression worth learning from this conversation, formatted as: word — 中文意思；一個簡短例句 (empty string if none)}.
+
+Lines:
 `.trim();

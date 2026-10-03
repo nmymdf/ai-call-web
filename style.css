@@ -164,3 +164,27 @@ pre.log { white-space: pre-wrap; word-break: break-all; font-size: 11px; color: 
 .toast { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 30px); transform: translateX(-50%); background: #2A3558; color: #fff; padding: 12px 18px;
   border-radius: 14px; z-index: 60; max-width: 88%; font-size: 14px; line-height: 1.4; text-align: center; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
 .footer { text-align: center; color: var(--gold); font: italic 12px Georgia, serif; margin-top: 6px; }
+
+/* chat bubbles on the call screen */
+.chat { width: 100%; flex: 1; min-height: 0; overflow-y: auto; margin: 10px 0 4px; padding: 6px 2px; display: flex; flex-direction: column; -webkit-overflow-scrolling: touch; }
+.chat .m { display: flex; flex-direction: column; align-items: flex-start; margin-bottom: 10px; max-width: 88%; }
+.chat .m.me { align-self: flex-end; align-items: flex-end; }
+.chat .bub { padding: 10px 14px; border-radius: 18px; font-size: 17px; line-height: 1.5; background: #1C2748; border-top-left-radius: 6px; text-align: left; }
+.chat .m.me .bub { background: #2F6FED; color: #fff; border-top-left-radius: 18px; border-top-right-radius: 6px; }
+.chat .tbtn { margin: 4px 0 0 4px; padding: 3px 12px; border-radius: 12px; background: #1A2440; border: 1px solid var(--stroke); color: var(--gold); font-weight: 700; font-size: 13px; }
+.chat .tr { margin: 4px 0 0 4px; font-size: 15px; line-height: 1.5; color: #BFD0F5; text-align: left; }
+
+/* review of mistakes */
+.segs { display: flex; gap: 8px; margin-bottom: 12px; }
+.seg { flex: 1; height: 36px; border-radius: 18px; background: var(--field); border: 1px solid var(--stroke); color: var(--sub); font-weight: 700; font-size: 14px; }
+.seg.on { color: var(--gold); border-color: var(--gold); }
+.ecard { background: var(--card); border: 1px solid var(--stroke); border-radius: 16px; padding: 14px 16px; margin-bottom: 12px; }
+.ecard .meta { color: var(--sub); font-size: 12px; margin-bottom: 8px; }
+.ecard .meta.imp { color: var(--red); font-weight: 700; }
+.ecard .said { color: #FF9C9C; text-decoration: line-through; text-decoration-color: rgba(255,107,107,.5); font-size: 16px; line-height: 1.45; }
+.ecard .better { color: #7DE29A; font-size: 17px; font-weight: 600; margin-top: 4px; line-height: 1.45; }
+.ecard .why { color: var(--sub); font-size: 14px; margin-top: 6px; line-height: 1.5; }
+.ecard .acts { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.ecard .acts .pill { height: 34px; font-size: 13px; }
+.quiz .q { font-size: 20px; line-height: 1.5; margin-top: 4px; color: #FF9C9C; }
+.quiz .a { font-size: 20px; line-height: 1.5; margin-top: 4px; color: #7DE29A; font-weight: 600; }

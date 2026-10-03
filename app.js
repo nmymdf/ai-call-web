@@ -1,7 +1,8 @@
 /* AI 來電 練英文 — web version. UI, call flow, settings. */
 "use strict";
 
-const VERSION = "1.1";
+const VERSION = "1.2";
+const TEXT_MODELS = ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash"];
 const PAGE_URL = location.origin + location.pathname;
 
 // ================================================================ helpers
@@ -63,7 +64,7 @@ function sw(title, sub, checked, onChange) {
 
 const DEFAULTS = {
   key: "", liveModel: "", persona: "random", topicId: "random", level: 3, style: "chatty",
-  userName: "", showSubs: true, goalMin: 15, bargeIn: false, customTopics: []
+  userName: "", showSubs: true, goalMin: 15, bargeIn: false, speed: 0, customTopics: []
 };
 let P = Object.assign({}, DEFAULTS);
 try { Object.assign(P, JSON.parse(localStorage.getItem("aicall_prefs") || "{}")); } catch (e) {}
@@ -76,6 +77,38 @@ const Calls = {
   setFeedback(ts, fb) { const l = this.all(); const r = l.find(x => x.ts === ts); if (r) { r.feedback = fb; this.put(l); } },
   markSeen(ts) { const l = this.all(); const r = l.find(x => x.ts === ts); if (r) { r.seen = true; this.put(l); } },
   clear() { try { localStorage.removeItem("aicall_calls"); } catch (e) {} }
+};
+
+/** Lower-case letters and digits only, for comparing sentences. */
+function normText(s) { return String(s || "").toLowerCase().replace(/[^\p{L}\p{N}]/gu, ""); }
+
+/** The review list. Nothing is ever removed automatically; the user decides. */
+const Errs = {
+  K: "aicall_errors",
+  all() { try { return JSON.parse(localStorage.getItem(this.K) || "[]"); } catch (e) { return []; } },
+  put(l) { try { localStorage.setItem(this.K, JSON.stringify(l)); } catch (e) {} },
+  /** The same correction showing up again only raises its counter and puts it back to "to review". */
+  addMany(items) {
+    const l = this.all();
+    for (const n of items) {
+      const k = normText(n.better); if (!k) continue;
+      const o = l.find(x => normText(x.better) === k);
+      if (o) { o.lt = n.lt; o.count = (o.count || 1) + 1; o.done = false; o.said = n.said; if (n.why) o.why = n.why; o.sev = Math.max(o.sev || 2, n.sev || 2); }
+      else l.push(n);
+    }
+    this.put(l);
+  },
+  setDone(id, v) { const l = this.all(); const r = l.find(x => x.id === id); if (r) { r.done = v; this.put(l); } },
+  remove(id) { this.put(this.all().filter(x => x.id !== id)); },
+  clearDone() { this.put(this.all().filter(x => !x.done)); },
+  clear() { try { localStorage.removeItem(this.K); } catch (e) {} },
+  exportText() {
+    return this.all().sort((a, b) => (b.lt || b.ts) - (a.lt || a.ts)).map(e => {
+      const d = new Date(e.lt || e.ts);
+      return (e.done ? "[已學會] " : "") + (e.sev >= 3 ? "[重要] " : "") + d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()) + "（" + (e.count || 1) + " 次）\n" +
+        "你說：" + e.said + "\n更好：" + e.better + (e.why ? "\n" + e.why : "");
+    }).join("\n\n");
+  }
 };
 
 const Diag = {
@@ -94,8 +127,12 @@ function formatFeedback(json) {
   try {
     const o = JSON.parse(json), parts = [];
     if (o.praise) parts.push("👍 " + o.praise);
-    if (o.grammar) parts.push("✏️ " + o.grammar);
-    if (o.phrase) parts.push("💬 " + o.phrase);
+    if (Array.isArray(o.errors)) {
+      for (const e of o.errors) parts.push("✏️ " + (e.sev >= 3 ? "【重要】" : "") + "你說：" + e.said + " → 更好：" + e.better + (e.why ? "（" + e.why + "）" : ""));
+    } else {
+      if (o.grammar) parts.push("✏️ " + o.grammar);
+      if (o.phrase) parts.push("💬 " + o.phrase);
+    }
     if (o.word) parts.push("📚 " + o.word);
     return parts.join("\n\n");
   } catch (e) { return ""; }
@@ -238,12 +275,23 @@ function renderMain() {
     grid.appendChild(el);
   });
   const styleSel = h("select", { class: "field" },
-    h("option", { value: "chatty", text: "活潑親切（愛笑、愛開玩笑）" }),
-    h("option", { value: "focused", text: "簡潔直接（比較正經）" }));
+    h("option", { value: "chatty", text: "活潑親切（愛聊生活小事）" }),
+    h("option", { value: "focused", text: "簡潔直接（比較正經）" }),
+    h("option", { value: "gentle", text: "溫柔鼓勵（多肯定、有耐心）" }),
+    h("option", { value: "curious", text: "愛追問（會多問你幾句）" }),
+    h("option", { value: "funny", text: "幽默風趣（愛開玩笑）" }));
   styleSel.value = P.style;
   styleSel.addEventListener("change", () => { P.style = styleSel.value; savePrefs(); });
+  const speedSel = h("select", { class: "field" },
+    h("option", { value: "0", text: "正常" }),
+    h("option", { value: "1", text: "稍慢" }),
+    h("option", { value: "2", text: "更慢（很慢、停頓清楚）" }));
+  speedSel.value = String(P.speed || 0);
+  speedSel.addEventListener("change", () => { P.speed = parseInt(speedSel.value, 10) || 0; savePrefs(); });
   root.appendChild(card("來電者", grid, note("每位來電者的臉、聲音、名字都是固定的。選「隨機」，每通電話會換一位。"), gap(10),
-    h("div", { class: "flabel", text: "對方說話風格" }), styleSel));
+    h("div", { class: "flabel", text: "對方說話風格" }), styleSel, gap(10),
+    h("div", { class: "flabel", text: "對方說話速度" }), speedSel,
+    note("速度只是請對方說得慢一點，聲音本身不會變。")));
 
   // ---- level
   const levelDesc = h("div", { class: "note", style: "font-size:13px;margin-top:10px" });
@@ -265,8 +313,9 @@ function renderMain() {
 
   // ---- nav cards
   root.appendChild(h("div", { class: "navrow" },
-    h("div", { class: "card click", on: { click: () => showSub("stats") } }, h("h2", { text: "統計" }), note("累積時間、走勢、目標")),
-    h("div", { class: "card click", on: { click: () => showSub("system") } }, h("h2", { text: "系統" }), note("金鑰、插話、手機教學"))));
+    h("div", { class: "card click", on: { click: () => showSub("stats") } }, h("h2", { text: "統計" }), note("時間、走勢")),
+    h("div", { class: "card click", on: { click: () => showSub("review") } }, h("h2", { text: "複習" }), note("錯誤、測驗")),
+    h("div", { class: "card click", on: { click: () => showSub("system") } }, h("h2", { text: "系統" }), note("金鑰、教學"))));
 
   root.appendChild(h("div", { class: "footer", text: "AI 來電 練英文  ·  ArchieKuo  ·  v" + VERSION }));
 }
@@ -326,7 +375,7 @@ let C = null;       // the active call
 
 function showIncoming() {
   if (C) return;
-  pending = { persona: resolvePersona(P.persona), topic: resolveTopic(P.topicId, P.customTopics) };
+  pending = { persona: drawPersona(P.persona), topic: drawTopic(P.topicId, P.customTopics) };
   const el = $("incoming");
   el.className = "screen call ringing";
   el.replaceChildren(
@@ -367,7 +416,7 @@ function acceptIncoming() {
 function dial() {
   if (C) return;
   ensureAC();
-  beginCall(true, resolvePersona(P.persona), resolveTopic(P.topicId, P.customTopics));
+  beginCall(true, drawPersona(P.persona), drawTopic(P.topicId, P.customTopics));
 }
 
 function logLine(msg) {
@@ -378,7 +427,7 @@ function logLine(msg) {
 async function beginCall(outgoing, persona, topic) {
   if (!P.key) { toast("還沒有 Gemini 金鑰，請先到「系統」頁設定"); showSub("system"); return; }
   const ctx = ensureAC();
-  C = { outgoing, persona, topic, t0: Date.now(), startMs: Date.now(), lines: [], lastSpeaker: "", liveText: "", muted: false, live: null, stream: null, ended: false, ready: false, log: [], timer: null, level: P.level };
+  C = { outgoing, persona, topic, t0: Date.now(), startMs: Date.now(), lines: [], lastSpeaker: "", liveText: "", cur: null, curWho: "", newBubble: false, muted: false, live: null, stream: null, ended: false, ready: false, log: [], timer: null, level: P.level };
   logLine("通話開始（" + (outgoing ? "撥出" : "來電") + "）" + persona.name + " / " + topic.label + " / 難度 " + P.level);
   buildCallScreen();
   show("call");
@@ -397,7 +446,7 @@ async function beginCall(outgoing, persona, topic) {
   const mine = C;
   C.live = new LiveSession({
     apiKey: P.key, savedModel: P.liveModel, voice: persona.voice,
-    system: livePrompt(topic, P.style, P.userName, P.level, persona, outgoing),
+    system: livePrompt(topic, P.style, P.userName, P.level, persona, outgoing, P.speed || 0),
     cue: outgoing ? OUTGOING_CUE : OPENING_CUE,
     ctx, stream: C.stream,
     isMuted: () => mine.muted,
@@ -406,12 +455,11 @@ async function beginCall(outgoing, persona, topic) {
     onLog: (m) => { if (C === mine) { logLine(m); if (m.startsWith("開始傳送")) { mine.ready = true; } } },
     onModelText: (t) => {
       if (C !== mine) return;
-      if (t === "\u0000") { mine.liveText = ""; return; }
+      if (t === "\u0000") { mine.liveText = ""; mine.newBubble = true; return; }
       addText("Caller", t); mine.liveText += t;
-      const el = $("subs");
-      if (el && P.showSubs) { el.textContent = mine.liveText.slice(-240); el.classList.remove("empty"); el.scrollTop = el.scrollHeight; }
+      bubble("Caller", t);
     },
-    onUserText: (t) => { if (C === mine) addText("You", t); },
+    onUserText: (t) => { if (C === mine) { addText("You", t); bubble("You", t); } },
     onFail: (e) => { if (C === mine) failCall(e); }
   });
   C.live.start();
@@ -431,23 +479,63 @@ function addText(who, t) {
   C.lines.push(t);
 }
 
+// ---- Chat bubbles: shown only when "顯示對話文字" is on. They live on screen only and are never saved.
+function bubble(who, piece) {
+  const box = $("chat");
+  if (!box || !C || !piece) return;
+  if (!piece.trim() && !C.cur) return;
+  const near = box.scrollHeight - box.scrollTop - box.clientHeight < 140;
+  if (!C.cur || C.curWho !== who || C.newBubble) {
+    if (!piece.trim()) return;
+    C.cur = makeBubble(box, who === "Caller");
+    C.curWho = who; C.newBubble = false;
+  }
+  C.cur.textContent += C.cur.textContent ? piece : piece.replace(/^\s+/, "");
+  if (near) box.scrollTop = box.scrollHeight;
+}
+
+function makeBubble(box, caller) {
+  const bub = h("div", { class: "bub" });
+  const kids = [bub];
+  if (caller) {
+    const tr = h("div", { class: "tr hidden" });
+    kids.push(h("button", { class: "tbtn", text: "譯", on: { click: () => translateBubble(bub, tr) } }), tr);
+  }
+  const m = h("div", { class: "m " + (caller ? "caller" : "me") }, kids);
+  box.appendChild(m);
+  return bub;
+}
+
+/** Translates one bubble to Chinese, only when the user taps 譯 (tap again to hide). */
+async function translateBubble(bub, tr) {
+  if (tr.dataset.done) { tr.classList.toggle("hidden"); return; }
+  const src = bub.textContent.trim();
+  if (!src) return;
+  tr.classList.remove("hidden"); tr.textContent = "翻譯中…";
+  try {
+    const out = await geminiGenerate(P.key, TEXT_MODELS, "Translate the following English into natural Traditional Chinese (Taiwan). Output only the translation, with no notes.\n\n" + src, false);
+    tr.textContent = String(out).trim(); tr.dataset.done = "1";
+  } catch (e) { tr.textContent = "翻譯失敗，請稍後再試"; }
+}
+
 function buildCallScreen() {
   const el = $("call");
   el.className = "screen call";
   const muteBtn = h("button", { class: "round grey", text: "靜音", on: { click: () => {
     C.muted = !C.muted; muteBtn.classList.toggle("on", C.muted); logLine(C.muted ? "靜音" : "取消靜音");
   } } });
-  el.replaceChildren(
+  const chat = !!P.showSubs; // bubbles on: smaller photo to make room
+  el.replaceChildren(...[
     h("div", { class: "tag", id: "callTag", text: C.topic.label }),
-    h("img", { class: "photo", src: C.persona.photo, alt: "", style: "width:150px;height:150px;margin-top:6px" }),
-    h("div", { class: "name", text: C.persona.name }),
+    h("img", { class: "photo", src: C.persona.photo, alt: "", style: chat ? "width:84px;height:84px;margin-top:0" : "width:150px;height:150px;margin-top:6px" }),
+    h("div", { class: "name", text: C.persona.name, style: chat ? "font-size:26px;margin:8px 0 2px" : null }),
     h("div", { class: "status", id: "callStatus", text: C.outgoing ? "撥號中…" : "連線中…" }),
-    h("div", { class: "subs empty", id: "subs" }),
+    chat ? h("div", { class: "chat", id: "chat" }) : null,
     h("div", { id: "callErr", class: "err" }),
-    h("div", { class: "spacer" }),
+    chat ? null : h("div", { class: "spacer" }),
     h("div", { class: "actions" },
       h("div", {}, muteBtn, h("div", { class: "lbl", text: "麥克風" })),
-      h("div", {}, h("button", { class: "round red", text: "✆", style: "transform:rotate(135deg)", on: { click: () => endCall() } }), h("div", { class: "lbl", text: "掛斷" }))));
+      h("div", {}, h("button", { class: "round red", text: "✆", style: "transform:rotate(135deg)", on: { click: () => endCall() } }), h("div", { class: "lbl", text: "掛斷" })))].filter(Boolean));
 }
 
 function tickCall() {
@@ -497,21 +585,64 @@ function saveCall(c) {
     const userWords = userLines.reduce((n, l) => n + l.slice(4).trim().split(/\s+/).filter(Boolean).length, 0);
     Diag.addLog({ ts: c.startMs, persona: c.persona.name, topic: c.topic.label, lines: c.log.slice(-150) });
     if (dur < 20 || !userLines.length) return;
-    const rec = { ts: c.startMs, durationSec: dur, persona: c.persona.name, topic: c.topic.label, level: c.level, transcript: text, feedback: "", seen: false };
+    // The conversation text is NOT kept: only date, length, caller and topic stay in the call list.
+    const rec = { ts: c.startMs, durationSec: dur, persona: c.persona.name, topic: c.topic.label, level: c.level, transcript: "", feedback: "", seen: false };
     Calls.add(rec);
     if (userLines.length >= 2 && userWords >= 12 && P.key) {
-      geminiGenerate(P.key, ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash"], FEEDBACK_PROMPT + "\n" + text, true)
-        .then(t => {
-          t = t.trim().replace(/^```json/, "").replace(/^```/, "").replace(/```$/, "").trim();
-          JSON.parse(t);
-          Calls.setFeedback(rec.ts, t);
-          if (!$("main").classList.contains("hidden") && !C) renderMain();
-        }).catch(() => {});
+      analyzeCall(text, P.key).then(r => {
+        Calls.setFeedback(rec.ts, JSON.stringify({ praise: r.praise, word: r.word, errors: r.errors }));
+        Errs.addMany(r.errors.map((e, i) => ({ id: rec.ts + "-" + i, ts: rec.ts, lt: rec.ts, said: e.said, better: e.better, why: e.why, sev: e.sev, count: 1, done: false, topic: rec.topic })));
+        if (!$("main").classList.contains("hidden") && !C) renderMain();
+      }).catch(() => {});
     }
   } catch (e) { /* never block hanging up */ }
 }
 
-// ================================================================ sub pages (stats / system)
+// ================================================================ after-call analysis
+
+const TURNS_PER_PART = 8, MAX_FIX = 5;
+function parseJson(t) { return JSON.parse(String(t).trim().replace(/^```json/, "").replace(/^```/, "").replace(/```$/, "").trim()); }
+
+/** Reads the whole conversation in parts and keeps the most serious mistakes (at most 5), plus a praise line and a word. */
+async function analyzeCall(text, key) {
+  const turns = text.split("\n").map(l => l.startsWith("You:") ? { me: true, text: l.slice(4).trim() } : l.startsWith("Caller:") ? { me: false, text: l.slice(7).trim() } : null).filter(m => m && m.text);
+  const parts = []; let cur = [], n = 0;
+  for (const m of turns) { cur.push(m); if (m.me && ++n >= TURNS_PER_PART) { parts.push(cur); cur = []; n = 0; } }
+  if (cur.some(m => m.me)) { if (n < 3 && parts.length) parts[parts.length - 1].push(...cur); else parts.push(cur); }
+  const found = []; let okParts = 0, lastErr = null, order = 0;
+  for (const part of parts) {
+    const body = part.map(m => (m.me ? "Learner: " : "Partner: ") + m.text).join("\n");
+    const mine = normText(part.filter(m => m.me).map(m => m.text).join(" "));
+    let o = null;
+    for (let tryNo = 0; tryNo < 2 && !o; tryNo++) {
+      try { o = parseJson(await geminiGenerate(key, TEXT_MODELS, ERRORS_PROMPT + "\n" + body, true)); }
+      catch (e) { lastErr = e; await new Promise(r => setTimeout(r, 1500)); }
+    }
+    if (!o) continue;
+    okParts++;
+    for (const x of (Array.isArray(o.errors) ? o.errors : [])) {
+      if (!x || !x.said || !x.better) continue;
+      const said = normText(x.said);
+      if (said.length < 3 || !mine.includes(said)) continue;          // must really be something the learner said
+      if (said === normText(x.better)) continue;
+      found.push({ said: String(x.said).trim(), better: String(x.better).trim(), why: String(x.why || "").trim(), sev: Number(x.sev) >= 3 ? 3 : 2, order: order++ });
+    }
+  }
+  if (!okParts) throw lastErr || new Error("分析失敗");
+  const seen = new Set(), uniq = [];
+  for (const f of found) { const k = normText(f.said); if (!seen.has(k)) { seen.add(k); uniq.push(f); } }
+  uniq.sort((a, b) => b.sev - a.sev || a.order - b.order);
+  const errors = uniq.slice(0, MAX_FIX).map(({ order, ...rest }) => rest);
+  let praise = "", word = "";
+  try {
+    const mineText = turns.filter(m => m.me).map(m => m.text).join("\n").slice(0, 6000);
+    const s = parseJson(await geminiGenerate(key, TEXT_MODELS, SUMMARY_PROMPT + "\n" + mineText, true));
+    praise = String(s.praise || ""); word = String(s.word || "");
+  } catch (e) {}
+  return { praise, errors, word };
+}
+
+// ================================================================ sub pages (stats / review / system)
 
 let subTab = "stats";
 function showSub(tab) {
@@ -521,8 +652,9 @@ function showSub(tab) {
   root.appendChild(h("div", { class: "topbar" },
     h("button", { class: "back", text: "‹ 返回", on: { click: hideSub } }),
     h("button", { class: "tab" + (tab === "stats" ? " on" : ""), text: "統計", on: { click: () => showSub("stats") } }),
+    h("button", { class: "tab" + (tab === "review" ? " on" : ""), text: "複習", on: { click: () => showSub("review") } }),
     h("button", { class: "tab" + (tab === "system" ? " on" : ""), text: "系統", on: { click: () => showSub("system") } })));
-  if (tab === "stats") buildStats(root); else buildSystem(root);
+  if (tab === "stats") buildStats(root); else if (tab === "review") buildReview(root); else buildSystem(root);
   show("sub");
   if (tab === "stats") setTimeout(() => charts.forEach(c => c.redraw && c.redraw()), 0);
 }
@@ -647,16 +779,84 @@ function buildStats(root) {
       h("div", { class: "s", text: (d.getMonth() + 1) + "/" + d.getDate() + " " + pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + "　" + Math.floor(r.durationSec / 60) + "分" + (r.durationSec % 60) + "秒" })));
   });
   root.appendChild(card("通話紀錄",
-    recs.length ? histBox : note("還沒有通話紀錄。只存文字（不存聲音），保留最近 50 通。"),
+    recs.length ? histBox : note("還沒有通話紀錄。只記日期、時長、對象、主題和小重點，不存對話內容（也不存聲音），保留最近 50 通。"),
     recs.length ? h("button", { class: "btn danger", text: "全部清除", on: { click: () => modal("清除全部通話紀錄？", h("div"), [{ text: "取消" }, { text: "清除", primary: true, onClick: () => { Calls.clear(); showSub("stats"); } }]) } }) : null));
 
   root.appendChild(h("button", { class: "btn danger", text: "清除全部統計", on: { click: () =>
     modal("清除全部統計？", h("div", { class: "sub", text: "累積時間、走勢與排行都會歸零，無法復原。" }), [{ text: "取消" }, { text: "清除", primary: true, onClick: () => { Stats.clear(); showSub("stats"); } }]) } }));
 }
 
+// ---- review of mistakes
+let reviewTab = "todo"; // "todo" | "done"
+function reviewRefresh() { const y = window.scrollY; showSub("review"); window.scrollTo(0, y); }
+
+function buildReview(root) {
+  const all = Errs.all().sort((a, b) => (b.lt || b.ts) - (a.lt || a.ts));
+  const todo = all.filter(e => !e.done), done = all.filter(e => e.done);
+  const seg = (id, t) => h("button", { class: "seg" + (reviewTab === id ? " on" : ""), text: t, on: { click: () => { reviewTab = id; showSub("review"); } } });
+  root.appendChild(h("div", { class: "segs" }, seg("todo", "待複習 " + todo.length), seg("done", "已學會 " + done.length)));
+  if (reviewTab === "todo" && todo.length) root.appendChild(h("button", { class: "btn gold", text: "開始複習（" + todo.length + "）", on: { click: () => startQuiz(todo) } }));
+  if (all.length) {
+    root.appendChild(gap(8));
+    root.appendChild(h("div", { class: "row" },
+      h("div", { class: "grow" }, h("button", { class: "btn outline", text: "複製全部", on: { click: () => copyText(Errs.exportText()) } })),
+      h("div", { class: "grow" }, h("button", { class: "btn outline", text: "清空已學會", style: done.length ? "" : "opacity:.4", on: { click: () => {
+        if (!done.length) return;
+        modal("清空「已學會」？", h("div", { class: "sub", text: "已學會的 " + done.length + " 項會被刪除，無法復原。" }), [{ text: "取消" }, { text: "清空", primary: true, onClick: () => { Errs.clearDone(); reviewRefresh(); } }]);
+      } } }))));
+    root.appendChild(gap(10));
+  }
+  const list = reviewTab === "todo" ? todo : done;
+  if (!list.length) root.appendChild(note(reviewTab === "todo"
+    ? "還沒有待複習的項目。每通電話結束後，系統會把最嚴重的幾個錯誤放進來。"
+    : "還沒有學會的項目。複習時按「會了」，或在項目上按「我學會了」。"));
+  list.forEach(e => root.appendChild(errCard(e)));
+  if (all.length) root.appendChild(h("button", { class: "btn danger", text: "清空全部", on: { click: () =>
+    modal("清空全部錯誤？", h("div", { class: "sub", text: "待複習和已學會共 " + all.length + " 項都會被刪除，無法復原。" }), [{ text: "取消" }, { text: "清空", primary: true, onClick: () => { Errs.clear(); reviewRefresh(); } }]) } }));
+}
+
+function errCard(e) {
+  const d = new Date(e.lt || e.ts);
+  const meta = (e.sev >= 3 ? "【重要】 " : "") + (d.getMonth() + 1) + "/" + d.getDate() + ((e.count || 1) > 1 ? "　出現 " + e.count + " 次" : "") + (e.topic ? "　" + e.topic : "");
+  return h("div", { class: "ecard" },
+    h("div", { class: "meta" + (e.sev >= 3 ? " imp" : ""), text: meta }),
+    h("div", { class: "said", text: e.said }),
+    h("div", { class: "better", text: e.better }),
+    e.why ? h("div", { class: "why", text: e.why }) : null,
+    h("div", { class: "acts" },
+      h("button", { class: "pill", text: e.done ? "放回待複習" : "✓ 我學會了", on: { click: () => { Errs.setDone(e.id, !e.done); reviewRefresh(); } } }),
+      h("button", { class: "pill", text: "複製", on: { click: () => copyText(e.said + " → " + e.better + (e.why ? "（" + e.why + "）" : "")) } }),
+      h("button", { class: "pill", text: "刪除", on: { click: () => { Errs.remove(e.id); reviewRefresh(); } } })));
+}
+
+/** Flash-card review: shows what you said, then the better version; "會了" moves it to learned. */
+function startQuiz(items) {
+  const list = items.slice().sort(() => Math.random() - 0.5);
+  let i = 0, revealed = false, close = null;
+  const box = h("div", { class: "quiz" });
+  function paint() {
+    const e = list[i];
+    box.replaceChildren(
+      h("div", { class: "sub", text: (i + 1) + " / " + list.length }),
+      h("div", { class: "sub", style: "margin-top:12px", text: "你當時說：" }),
+      h("div", { class: "q", text: e.said }),
+      revealed
+        ? h("div", {}, h("div", { class: "sub", style: "margin-top:12px", text: "更好的說法：" }), h("div", { class: "a", text: e.better }), e.why ? h("div", { class: "note", style: "font-size:14px", text: e.why }) : null)
+        : h("div", { class: "sub", style: "margin-top:12px", text: "先想想看，怎麼說比較好？" }),
+      gap(14),
+      h("div", { class: "row" }, !revealed
+        ? h("button", { class: "pill gold", text: "看答案", on: { click: () => { revealed = true; paint(); } } })
+        : [h("button", { class: "pill gold", text: "會了", on: { click: () => { Errs.setDone(e.id, true); next(); } } }),
+           h("button", { class: "pill", text: "還不熟", on: { click: next } })]));
+  }
+  function next() { i++; revealed = false; if (i >= list.length) { close && close(); reviewRefresh(); toast("複習完了，做得好！"); } else paint(); }
+  paint();
+  close = modal("複習", box, [{ text: "結束", onClick: () => { setTimeout(reviewRefresh, 0); } }]);
+}
+
 function showCallDetail(r) {
   const fb = formatFeedback(r.feedback);
-  const body = (fb ? fb + "\n\n────────\n\n" : "") + r.transcript;
+  const body = [fb, r.transcript].filter(Boolean).join("\n\n────────\n\n") || "（這通沒有留下文字）";
   modal(r.persona + " · " + r.topic, h("div", { class: "fb", style: "font-size:14px", text: body }), [
     { text: "複製", onClick: () => { copyText(body); return false; } }, { text: "關閉", primary: true }]);
 }

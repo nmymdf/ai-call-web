@@ -1,7 +1,8 @@
 /* AI 來電 練英文 — web version. UI, call flow, settings. */
 "use strict";
 
-const VERSION = "1.2";
+const VERSION = "1.3";
+const refreshMs = () => window.__REFRESH_MS || 300000; // open a fresh connection every ~5 min (long sessions went silent)
 const TEXT_MODELS = ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash"];
 const PAGE_URL = location.origin + location.pathname;
 
@@ -443,26 +444,74 @@ async function beginCall(outgoing, persona, topic) {
 
   if (outgoing) { await new Promise(r => setTimeout(r, 2600)); Ring.stop(); if (C.ended) { stopStream(); return; } }
 
+  C.stream && startLive(false);
+}
+
+/** Open (or re-open after a drop) the live voice connection for the current call. */
+function startLive(recover) {
   const mine = C;
-  C.live = new LiveSession({
+  const persona = mine.persona, topic = mine.topic, outgoing = mine.outgoing;
+  const hist = recover ? mine.lines.join("").slice(-2200).replace(/^Caller: /gm, "\u0001").replace(/^You: /gm, "Learner: ").replace(/\u0001/g, "You: ").trim() : "";
+  const system = livePrompt(topic, P.style, P.userName, P.level, persona, outgoing, P.speed || 0) +
+    (recover === "refresh"
+      ? "\n\nThe conversation is already in progress and you are continuing it on a fresh connection. What was said so far (the \"You\" lines are yours):\n" + hist + "\nDo NOT greet, do not mention any interruption, and do not speak first: stay silent until the learner speaks, then reply naturally to what they say, as if nothing happened."
+      : recover ? "\n\nThe call was just interrupted by a short connection problem and you are resuming it. What was said so far (the \"You\" lines are yours):\n" + hist + "\nContinue naturally from there." : "");
+  const cue = recover === "refresh" ? null : recover
+    ? "(The connection dropped for a moment and is back. Say one very short line such as \"Sorry, I lost you for a second.\" and then carry on with the conversation naturally from where it was.)"
+    : (outgoing ? OUTGOING_CUE : OPENING_CUE);
+  mine.lastSrvMs = Date.now();
+  mine.sessionMs = Date.now();
+  const L = new LiveSession({
     apiKey: P.key, savedModel: P.liveModel, voice: persona.voice,
-    system: livePrompt(topic, P.style, P.userName, P.level, persona, outgoing, P.speed || 0),
-    cue: outgoing ? OUTGOING_CUE : OPENING_CUE,
-    ctx, stream: C.stream,
+    system, cue,
+    ctx: ensureAC(), stream: mine.stream,
     isMuted: () => mine.muted,
     allowBargeIn: () => P.bargeIn,
     onModelChosen: (m) => { P.liveModel = m; savePrefs(); },
     onLog: (m) => { if (C === mine) { logLine(m); if (m.startsWith("開始傳送")) { mine.ready = true; } } },
+    onServer: () => { mine.lastSrvMs = Date.now(); },
     onModelText: (t) => {
-      if (C !== mine) return;
+      if (C !== mine || mine.live !== L) return;
       if (t === "\u0000") { mine.liveText = ""; mine.newBubble = true; return; }
+      mine.lastTextMs = Date.now(); mine.nudges = 0;
       addText("Caller", t); mine.liveText += t;
       bubble("Caller", t);
     },
-    onUserText: (t) => { if (C === mine) { addText("You", t); bubble("You", t); } },
-    onFail: (e) => { if (C === mine) failCall(e); }
+    onUserText: (t) => { if (C === mine && mine.live === L) { mine.lastTextMs = Date.now(); addText("You", t); bubble("You", t); } },
+    onFail: (e) => {
+      if (C !== mine || mine.live !== L || mine.ended) return;
+      if (L.ready && Date.now() - (mine.lastRetryMs || 0) > 120000) mine.retries = 0;
+      if (L.ready && (mine.retries || 0) < 4) { mine.retries = (mine.retries || 0) + 1; mine.lastRetryMs = Date.now(); logLine("連線中斷，自動重連（第 " + mine.retries + " 次）：" + ((e && e.message) || e)); reconnectCall(true, "drop"); }
+      else failCall(e);
+    }
   });
-  C.live.start();
+  mine.live = L;
+  L.start();
+}
+
+/** Drop the current connection and open a new one; the call screen stays up. */
+function reconnectCall(auto, mode) {
+  if (!C || C.ended || C.failed) return;
+  mode = mode || "drop";
+  const mine = C, old = C.live;
+  C.live = null;
+  try { old && old.close(); } catch (e) {}
+  C.newBubble = true;
+  C.stuck = false;
+  C.note = mode === "refresh" ? "" : (auto ? "連線中斷，正在重新連線…" : "正在重新連線…");
+  setTimeout(() => {
+    if (C === mine && !mine.ended && !mine.failed) {
+      startLive(mode);
+      setTimeout(() => { if (C === mine) mine.note = ""; }, 3500);
+    }
+  }, 700);
+}
+
+function nudgeCall() {
+  if (!C || C.ended || !C.live) return;
+  C.live.nudge();
+  C.lastSrvMs = Date.now();
+  logLine("叫對方回答");
 }
 
 function stopStream() {
@@ -543,7 +592,23 @@ function tickCall() {
   const st = $("callStatus");
   if (!st || C.failed) return;
   const secs = (Date.now() - C.startMs) / 1000;
-  if (C.live && C.live.ready && C.live.gotAudio) st.textContent = mmss(secs);
+  if (C.live && C.live.ready && !C.ended) {
+    const now = Date.now();
+    const quiet = !C.live.speaking();
+    const waiting = C.lastSpeaker === "You" && quiet && now - (C.lastTextMs || 0) > 9000 && now - (C.lastSrvMs || 0) > 9000;
+    if (waiting) {
+      if (!C.nudges) { C.nudges = 1; nudgeCall(); logLine("對方超過 9 秒沒有回應"); }
+      else { C.nudges = 0; logLine("叫了還是沒有回應，自動重新連線"); reconnectCall(true, "drop"); return; }
+    }
+    // long sessions stopped answering, so quietly swap in a fresh connection every few minutes
+    if (!waiting && C.lastSpeaker === "Caller" && C.newBubble && quiet && now - (C.sessionMs || now) > refreshMs() && now - (C.lastTextMs || 0) > 3000) {
+      logLine("連線已超過 " + Math.round((now - C.sessionMs) / 60000) + " 分鐘，趁安靜時換一條新連線");
+      reconnectCall(true, "refresh");
+      return;
+    }
+  }
+  if (C.note) st.textContent = C.note;
+  else if (C.live && C.live.ready && C.live.gotAudio) st.textContent = mmss(secs);
   else if (C.live && C.live.ready) st.textContent = "對方接起來了…";
   else if (!C.outgoing || secs > 2.6) st.textContent = "連線中…";
 }

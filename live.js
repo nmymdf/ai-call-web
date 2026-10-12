@@ -39,6 +39,8 @@ class LiveSession {
     this.sent = 0;
     this.micNode = null;
     this.out = null;
+    this.talking = false;
+    this.useVad = true;
   }
 
   async start() {
@@ -92,7 +94,9 @@ class LiveSession {
           systemInstruction: { parts: [{ text: this.o.system }] },
           inputAudioTranscription: {},
           outputAudioTranscription: {},
-          contextWindowCompression: { slidingWindow: {} }
+          contextWindowCompression: { slidingWindow: {} },
+          realtimeInputConfig: this.o.manual ? { automaticActivityDetection: { disabled: true } }
+            : (this.useVad ? { automaticActivityDetection: { endOfSpeechSensitivity: "END_SENSITIVITY_LOW", prefixPaddingMs: 120, silenceDurationMs: this.o.silenceMs || 1800 } } : undefined)
         }
       }));
     };
@@ -109,6 +113,13 @@ class LiveSession {
 
   fail(model, msg) {
     if (this.closed) return;
+    if (!this.ready && this.useVad && !this.o.manual && /1007|1011|invalid|unknown name|silence|sensitivity/i.test(msg)) {
+      this.useVad = false;
+      this.o.onLog("這個模型不接受「等待時間」設定，改用預設值");
+      try { this.ws && (this.ws.onclose = null, this.ws.onerror = null, this.ws.close()); } catch (e) {}
+      this.connect();
+      return;
+    }
     if (!this.ready && this.candIdx + 1 < this.candidates.length) {
       this.o.onLog(model + " 不能用（" + msg + "），換下一個");
       this.candIdx++;
@@ -130,11 +141,13 @@ class LiveSession {
   handle(raw, model) {
     let o;
     try { o = JSON.parse(raw); } catch (e) { return; }
+    if (this.o.onServer) this.o.onServer(o);
     if (o.setupComplete) {
       this.ready = true;
       this.o.onModelChosen(model);
       this.o.onLog("即時連線成功，開始通話");
       this.startAudio().then(() => {
+        if (!this.o.cue) return; // silent hand-over: wait for the learner to speak
         this.sendCue(false);
         setTimeout(() => {
           if (!this.closed && !this.gotAudio) { this.o.onLog("6 秒沒聲音，改用另一種方式叫對方開口"); this.sendCue(true); }
@@ -161,7 +174,8 @@ class LiveSession {
     }
     if (sc.outputTranscription && sc.outputTranscription.text && sc.outputTranscription.text.trim())
       this.o.onModelText(sc.outputTranscription.text);
-    if (sc.turnComplete) this.o.onModelText("\u0000");
+    if (sc.generationComplete) this.o.onLog("對方這一句講完（generationComplete）");
+    if (sc.turnComplete) { this.o.onLog("輪到你（turnComplete）"); this.o.onModelText("\u0000"); }
   }
 
   sendCue(asRealtime) {
@@ -217,6 +231,36 @@ class LiveSession {
     }
   }
 
+  /** Manual turn-taking: the learner presses a button when starting and when finished. */
+  startTalk() {
+    if (!this.o.manual || this.talking || this.closed || !this.ready) return;
+    this.flushPlayback();
+    this.talking = true;
+    this.send({ realtimeInput: { activityStart: {} } });
+    this.o.onLog("你開始說話（手動）");
+  }
+  endTalk() {
+    if (!this.o.manual || !this.talking) return;
+    this.talking = false;
+    this.send({ realtimeInput: { activityEnd: {} } });
+    this.o.onLog("你說完了（手動）");
+  }
+
+  /** Ask the model to answer now (used when it seems to have stopped responding). */
+  nudge() {
+    if (this.closed || !this.ready) return;
+    this.send({ clientContent: { turns: [{ role: "user", parts: [{ text: "(The learner has finished speaking. Please reply to what they just said now.)" }] }], turnComplete: true } });
+  }
+
+  /** Quietly tell the model about the pace the learner wants (no reply is triggered). */
+  setPace(speed) { this.sendNote(PACE_NOTES[speed] || PACE_NOTES[0]); }
+
+  /** Quietly pass an instruction to the model (it is not answered). */
+  sendNote(text) {
+    if (this.closed || !this.ready) return;
+    this.send({ clientContent: { turns: [{ role: "user", parts: [{ text }] }], turnComplete: false } });
+  }
+
   /** True while the model's voice is playing (or just finished). */
   speaking() {
     return this.ctx.currentTime < this.nextTime + 0.35;
@@ -225,9 +269,11 @@ class LiveSession {
   onMic(pcm) {
     if (this.closed || !this.ready) return;
     if (this.o.isMuted()) return;
+    if (this.o.manual && !this.talking) return;
     let data = pcm;
     // Without headphones the speaker would feed the microphone, so keep the mic silent while the caller talks.
     if (!this.o.allowBargeIn() && this.speaking()) data = new Int16Array(pcm.length);
+    if (this.o.meter) this.o.meter.feed(data, this.ctx.currentTime - 0.04);
     this.send({ realtimeInput: { audio: { mimeType: "audio/pcm;rate=16000", data: b64FromBytes(new Uint8Array(data.buffer, data.byteOffset, data.byteLength)) } } });
     if (++this.sent === 1) this.o.onLog("開始傳送麥克風聲音");
   }
@@ -241,13 +287,16 @@ class LiveSession {
     for (let i = 0; i < n; i++) f[i] = view.getInt16(i * 2, true) / 32768;
     const buf = this.ctx.createBuffer(1, n, 24000);
     buf.copyToChannel(f, 0);
+    const rate = (this.o.rate && this.o.rate()) || 1;
     const s = this.ctx.createBufferSource();
     s.buffer = buf;
+    s.playbackRate.value = rate;
     s.connect(this.out);
     const now = this.ctx.currentTime;
     const t = Math.max(now + 0.04, this.nextTime);
     s.start(t);
-    this.nextTime = t + buf.duration;
+    this.nextTime = t + buf.duration / rate;
+    if (this.o.meter) this.o.meter.modelSpan(t, this.nextTime);
     this.sources.add(s);
     s.onended = () => this.sources.delete(s);
   }
@@ -256,6 +305,7 @@ class LiveSession {
     for (const s of this.sources) { try { s.onended = null; s.stop(); } catch (e) {} }
     this.sources.clear();
     this.nextTime = 0;
+    if (this.o.meter) this.o.meter.cutModel(this.ctx.currentTime);
   }
 
   stopAudio() {
@@ -295,13 +345,18 @@ async function discoverTextModels(apiKey) {
 }
 
 async function geminiGenerate(apiKey, models, text, json) {
+  return geminiGenerateParts(apiKey, models, [{ text }], json);
+}
+
+/** Like geminiGenerate, but the request can carry several parts (text plus audio). */
+async function geminiGenerateParts(apiKey, models, parts, json) {
   let last = null;
   let list = [];
   try { list = await discoverTextModels(apiKey); } catch (e) { last = e; }
   for (const m of models) if (!list.includes(m)) list.push(m);
   for (const m of list) {
     try {
-      const body = { contents: [{ parts: [{ text }] }] };
+      const body = { contents: [{ parts }] };
       if (json) body.generationConfig = { responseMimeType: "application/json", temperature: 0.4 };
       const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + m + ":generateContent?key=" + encodeURIComponent(apiKey), {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)

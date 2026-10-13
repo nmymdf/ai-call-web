@@ -1,7 +1,7 @@
 /* AI 來電 練英文 — web version. UI, call flow, settings. */
 "use strict";
 
-const VERSION = "1.3";
+const VERSION = "1.4";
 const refreshMs = () => window.__REFRESH_MS || 300000; // open a fresh connection every ~5 min (long sessions went silent)
 const TEXT_MODELS = ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash"];
 const PAGE_URL = location.origin + location.pathname;
@@ -215,9 +215,10 @@ function renderMain() {
     h("img", { src: "img/logo.jpg", alt: "" })));
 
   if (!P.key) {
-    root.appendChild(h("div", { class: "card warn" }, h("h2", { text: "還差一步就能使用" }),
-      h("div", { class: "sub", text: "需要貼上免費的 Gemini 金鑰才能通話。" }), gap(10),
-      h("button", { class: "btn gold", text: "去設定金鑰", on: { click: () => showSub("system") } })));
+    root.appendChild(h("div", { class: "card warn" }, h("h2", { text: "第一次使用，約 3 分鐘設定（免費）" }),
+      h("div", { class: "sub", style: "line-height:1.6", text: "要先有一把免費的金鑰（通行碼）才能通話。我們一步一步帶你完成，不用懂電腦。" }), gap(10),
+      h("button", { class: "btn gold", text: "開始設定", on: { click: () => openSetup() } }), gap(4),
+      h("button", { class: "btn ghost", text: "我已經有金鑰了", on: { click: () => showSub("system") } })));
   }
 
   // feedback from the last call
@@ -998,18 +999,7 @@ function buildSystem(root) {
   root.appendChild(h("div", { class: "footer", text: "AI 來電 練英文  ·  v" + VERSION }));
 }
 
-function showKeyGuide() {
-  const body = h("div", { class: "steps" },
-    h("div", { text: "1.  按下面「開啟申請頁」，用 Google 帳號登入" }),
-    h("div", { text: "2.  按「Create API key」（建立 API 金鑰），選一個專案" }),
-    h("div", { text: "3.  按 key 旁邊的複製圖示" }),
-    h("div", { text: "4.  回到這個網頁，按「貼上剪貼簿的 key」" }),
-    h("div", { text: "5.  按「測試連線」，看到 ✓ 就完成" }),
-    note("免費額度內不收費，不用信用卡。免費層的內容可能被 Google 用來改進產品。key 是私人的，不要分享給別人，它只存在這台裝置的瀏覽器裡。"));
-  modal("如何申請 Gemini key（免費）", body, [
-    { text: "關閉" },
-    { text: "開啟申請頁", primary: true, onClick: () => { window.open("https://aistudio.google.com/apikey", "_blank"); return false; } }]);
-}
+function showKeyGuide() { openSetup(); }
 
 // ================================================================ start
 

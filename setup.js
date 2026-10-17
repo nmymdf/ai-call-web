@@ -3,9 +3,9 @@
 
 // ---- progress is kept on the phone, so leaving for Google's page and coming back lands on the same step
 const SETUP_KEY = "aicall_setup";
-const SETUP_TOTAL = 7;
-const SETUP_NUM = { welcome: 1, acct: 2, "acct-new": 2, apply: 3, copy: 4, paste: 5, test: 6, home: 7, done: 7 };
-const SETUP_BACK = { acct: "welcome", "acct-new": "acct", apply: "acct", copy: "apply", paste: "copy", test: "paste", home: "test" };
+const SETUP_TOTAL = 2;
+const SETUP_NUM = { welcome: 1, apply: 1, paste: 2, test: 2 };
+const SETUP_BACK = { paste: "apply" };
 
 function setupLoad() { try { return JSON.parse(localStorage.getItem(SETUP_KEY) || "null") || {}; } catch (e) { return {}; } }
 function setupSave(o) { try { localStorage.setItem(SETUP_KEY, JSON.stringify(o)); } catch (e) {} }
@@ -23,19 +23,16 @@ function inAppBrowser() {
 
 const GUIDE_URL = "https://aistudio.google.com/apikey";
 const SIGNUP_URL = "https://accounts.google.com/signup";
-const LOOKUP_URL = "https://accounts.google.com/";
 
 let SU = null;   // the open guide: { el, step, returned, acctOpen, ignoreLine, opened, pasteErr, test }
 
 function openSetup(auto) {
   if (SU) return;
   const saved = setupLoad();
-  SU = { el: h("div", { class: "setup" }), step: saved.step && SETUP_NUM[saved.step] ? saved.step : "welcome", returned: false, acctOpen: false, ignoreLine: false, opened: false, pasteErr: "", test: null, acct: saved.acct || "" };
-  if (SU.step === "test") SU.step = "paste";
-  if (SU.step === "home" || SU.step === "done") SU.step = "welcome";
+  SU = { el: h("div", { class: "setup" }), step: saved.step === "paste" ? "paste" : "apply", returned: false, ignoreLine: false, opened: false, pasteErr: "", test: null };
   document.body.appendChild(SU.el);
   document.body.classList.add("noscroll");
-  setupSave({ step: SU.step, acct: SU.acct, active: true });
+  setupSave({ step: SU.step, active: true });
   setupPaint();
 }
 
@@ -49,39 +46,10 @@ function closeSetup(keepStep) {
 
 function setupGo(step) {
   SU.step = step; SU.returned = false; SU.pasteErr = ""; SU.test = null;
-  setupSave({ step, acct: SU.acct, active: true });
+  setupSave({ step, active: true });
   setupPaint();
   SU.el.scrollTop = 0;
   if (step === "test") setupRunTest();
-}
-
-// ---- simple drawings (not screenshots: Google changes its pages, so the words always win)
-const DIAG_NOTE = "示意圖，實際畫面可能略有不同，以文字為準";
-function diagCreate() {
-  return h("div", { class: "diag" }, h("div", { html:
-    '<svg viewBox="0 0 300 130" role="img" aria-label="示意圖：找到 Create API key 按鈕">' +
-    '<rect x="6" y="6" width="288" height="118" rx="14" fill="#121A2E" stroke="#3A4A78"/>' +
-    '<text x="20" y="32" fill="#8FA0C4" font-size="13">Google AI Studio</text>' +
-    '<text x="20" y="54" fill="#EAF0FF" font-size="15" font-weight="700">API keys</text>' +
-    '<rect x="150" y="68" width="130" height="38" rx="10" fill="#D4AF37"/>' +
-    '<text x="215" y="92" fill="#1A1405" font-size="14" font-weight="700" text-anchor="middle">Create API key</text>' +
-    '<path d="M110 100 L140 90" stroke="#FF6B6B" stroke-width="3" stroke-linecap="round"/>' +
-    '<path d="M132 82 L142 90 L131 96" fill="none" stroke="#FF6B6B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>' +
-    '<text x="20" y="108" fill="#FF6B6B" font-size="13" font-weight="700">按這個</text></svg>' }),
-    h("div", { class: "dnote", text: DIAG_NOTE }));
-}
-function diagCopy() {
-  return h("div", { class: "diag" }, h("div", { html:
-    '<svg viewBox="0 0 300 120" role="img" aria-label="示意圖：金鑰旁邊的複製圖示">' +
-    '<rect x="6" y="6" width="288" height="108" rx="14" fill="#121A2E" stroke="#3A4A78"/>' +
-    '<text x="20" y="32" fill="#8FA0C4" font-size="13">你的金鑰</text>' +
-    '<rect x="16" y="46" width="268" height="40" rx="10" fill="#1A2440" stroke="#232E4D"/>' +
-    '<text x="28" y="72" fill="#EAF0FF" font-size="15" font-family="monospace">AQ.Ab8R••••••••••••</text>' +
-    '<rect x="238" y="52" width="38" height="28" rx="8" fill="#0A0F1E" stroke="#D4AF37"/>' +
-    '<rect x="249" y="58" width="12" height="14" rx="2" fill="none" stroke="#D4AF37" stroke-width="2"/>' +
-    '<rect x="253" y="62" width="12" height="14" rx="2" fill="#0A0F1E" stroke="#D4AF37" stroke-width="2"/>' +
-    '<text x="214" y="104" fill="#FF6B6B" font-size="13" font-weight="700" text-anchor="end">按複製圖示 ↗</text></svg>' }),
-    h("div", { class: "dnote", text: DIAG_NOTE }));
 }
 
 // ---- the frame every page shares
@@ -89,7 +57,7 @@ function setupFrame(step, title, kids, opts) {
   opts = opts || {};
   const n = SETUP_NUM[step] || 1;
   const back = SETUP_BACK[step];
-  const backTarget = step === "apply" && SU.acct === "new" ? "acct-new" : back;
+  const backTarget = back;
   return h("div", { class: "sbox" },
     h("div", { class: "sbar" },
       backTarget && !opts.noBack ? h("button", { class: "sback", text: "‹ 上一步", on: { click: () => setupGo(backTarget) } }) : h("span", { class: "sback ph", text: "" }),
@@ -111,7 +79,7 @@ function setupPaint() {
   const step = SU.step;
   let page;
   if (inAppBrowser() && !SU.ignoreLine) page = pgBrowser();
-  else page = ({ welcome: pgWelcome, acct: pgAcct, "acct-new": pgAcctNew, apply: pgApply, copy: pgCopy, paste: pgPaste, test: pgTest, home: pgHome, done: pgDone }[step] || pgWelcome)();
+  else page = ({ apply: pgApply, paste: pgPaste, test: pgTest }[step] || pgApply)();
   SU.el.replaceChildren(page);
 }
 
@@ -130,83 +98,30 @@ function pgBrowser() {
   ], { noCount: true, noBack: true, noHelp: true });
 }
 
-function pgWelcome() {
-  return setupFrame("welcome", "第一次使用，3 分鐘就好", [
-    sp("這個 App 需要一把免費的「金鑰（通行碼）」才能打電話。我們一步一步來，你只要照著做。"),
-    sli("✓", "免費，不用信用卡"),
-    sli("✓", "金鑰只存在這支手機，不會傳給別人"),
-    sli("✓", "需要一個 Google 帳號（沒有的話，我們會教你建立）"),
-    sp("大約 3 分鐘；如果要先建立 Google 帳號，大約 10 分鐘。"),
-    sbtn("開始", () => setupGo("acct"))
-  ], { noBack: true, noHelp: true });
-}
-
-function pgAcct() {
-  const more = h("div", { class: "smore" },
-    h("div", { class: "stp", text: "任選一個方法找找看：" }),
-    sli("1", "打開 Gmail、YouTube 或 Google 地圖，看右上角的圓形頭像，點進去會看到信箱。"),
-    sli("2", "打開「設定」→「密碼」，在搜尋框輸入 google，看有沒有 google.com 的項目。"),
-    sli("3", "用 Safari 打開 accounts.google.com，如果顯示一個帳號就是了；想不起來，按「忘記電子郵件地址？」，輸入手機號碼或備用信箱找。"),
-    sli("4", "到你的信箱搜尋「Google」，找「安全性快訊」或「歡迎使用 Google」的信，會寫出帳號。"),
-    h("button", { class: "sbtn outline", text: "開啟 Google 帳號頁（方法 3）", on: { click: () => window.open(LOOKUP_URL, "_blank") } }));
-  return setupFrame("acct", "你有 Google 帳號嗎？", [
-    sp("用過 Gmail、YouTube，或在手機上登入過 Google 的人，通常已經有了。"),
-    h("div", { class: "scard" },
-      h("div", { class: "stp", text: "最簡單的確認方式" }),
-      sp("打開 Google 地圖或 Gmail，點右上角的圓形頭像。看到像 xxx@gmail.com 的信箱，就是你的 Google 帳號，請把它記下來。")),
-    sp("注意：如果是公司或學校給的帳號，可能不能用，請改用個人帳號。"),
-    sbtn("我有，信箱記好了", () => { SU.acct = "have"; setupGo("apply"); }),
-    sbtn("我沒有 Google 帳號", () => { SU.acct = "new"; setupGo("acct-new"); }, "outline"),
-    sbtn(SU.acctOpen ? "收起說明" : "不確定，教我怎麼找", () => { SU.acctOpen = !SU.acctOpen; setupPaint(); }, "outline"),
-    SU.acctOpen ? more : null
-  ]);
-}
-
-function pgAcctNew() {
-  return setupFrame("acct-new", "先建立 Google 帳號", [
-    sp("很簡單，大約 5 分鐘。按下面的按鈕，會用 Safari 打開建立頁面："),
-    sli("1", "填姓名、生日、性別。"),
-    sli("2", "選一個新的 Gmail 地址，或用你原本的信箱（不一定要 Gmail）。"),
-    sli("3", "設定密碼。Google 可能會要你輸入手機號碼，收驗證碼。"),
-    sli("4", "建好後，把「信箱」和「密碼」寫在紙上或備忘錄。"),
-    sbtn("開啟建立帳號頁", () => window.open(SIGNUP_URL, "_blank")),
-    sbtn("我建好了，下一步", () => setupGo("apply"), "outline")
-  ], { returnedHint: "歡迎回來！如果帳號建好了，就按「我建好了，下一步」。" });
-}
-
 function pgApply() {
-  return setupFrame("apply", "去申請金鑰", [
-    sp("按下面的按鈕，會用 Safari 打開 Google 的申請頁。照下面的順序做："),
-    sli("1", "如果要你登入：請用剛才記下的信箱。想不起密碼，就按「忘記密碼」。"),
-    sli("2", "第一次進去會出現「條款」，按同意。"),
-    sli("3", "找到並按「Create API key」（建立 API 金鑰）。"),
-    sli("4", "如果問你要選哪個專案，選「建立新專案」。"),
-    sli("5", "出現一長串英文和數字（多半是 AQ. 或 AIza 開頭），就成功了。"),
-    diagCreate(),
-    sbtn("開啟申請頁", () => { SU.opened = true; window.open(GUIDE_URL, "_blank"); }),
-    sbtn("我看到金鑰了，下一步", () => setupGo("copy"), "outline")
-  ], { returnedHint: "歡迎回來！看到那一長串金鑰了嗎？看到就按「我看到金鑰了，下一步」；還沒有的話，再按「開啟申請頁」。" });
+  const noAcct = h("details", { class: "sq" }, h("summary", { text: "我沒有 Google 帳號" }),
+    h("div", { class: "sa" },
+      sp("先建立一個，大約 5 分鐘，免費。建好後再回來按上面的「去申請金鑰」。"),
+      h("button", { class: "sbtn outline", text: "建立 Google 帳號", on: { click: () => window.open(SIGNUP_URL, "_blank") } })));
+  return setupFrame("apply", "取得免費金鑰", [
+    sp("這個 App 需要一把免費的金鑰才能打電話。只有三個動作："),
+    sli("1", "按下面的按鈕，到 Google 頁面（用你的 Google 帳號登入）。"),
+    sli("2", "按「Create API key」（建立金鑰）。"),
+    sli("3", "按金鑰旁邊的複製圖示，然後回到這裡。"),
+    sbtn("去申請金鑰", () => { SU.opened = true; window.open(GUIDE_URL, "_blank"); }),
+    sbtn("我已經複製好了", () => setupGo("paste"), "outline"),
+    noAcct
+  ], { noBack: true });
 }
 
-function pgCopy() {
-  return setupFrame("copy", "複製金鑰", [
-    sp("金鑰是一長串英文和數字（多半是 AQ. 或 AIza 開頭，中間可能有一個點）。請把整串複製起來。"),
-    diagCopy(),
-    sli("1", "按金鑰旁邊的複製圖示（像兩張疊在一起的紙），看到「已複製」就好。"),
-    sli("2", "找不到圖示的話：長按那串字，選「拷貝」。"),
-    sli("3", "複製完，回到這個 App（用下方的返回，或切換 App）。"),
-    sbtn("我複製好了，下一步", () => setupGo("paste")),
-    sbtn("再去看一次申請頁", () => window.open(GUIDE_URL, "_blank"), "outline")
-  ], { returnedHint: "歡迎回來！金鑰複製好了就按下面「我複製好了，下一步」。" });
-}
-
-// Google now issues keys starting with "AQ." (older ones start with "AIza"): do not insist on a prefix, the connection test decides
-const KEY_RE = /^[0-9A-Za-z_.\-]{20,250}$/;
+// No rule about how a key starts or which characters it holds (Google has changed the format before: "AIza..." then "AQ.…").
+// Only rule out what is plainly not a key; the connection test decides the rest.
 function takeKey(raw) {
   const t = String(raw || "").trim();
+  if (t.length < 16 || t.length > 400) return "";
   if (/\s/.test(t)) return "";                 // a sentence or several words is not a key
-  if (KEY_RE.test(t)) return t;
-  return "";
+  if (/^https?:\/\//i.test(t)) return "";      // a web address is not a key
+  return t;
 }
 
 function pgPaste() {
@@ -220,7 +135,7 @@ function pgPaste() {
       try { t = await navigator.clipboard.readText(); } catch (e) { SU.pasteErr = "沒辦法自動貼上。請改用下面的方法：長按那一格，選「貼上」。"; setupPaint(); return; }
       const k = takeKey(t);
       if (k) acceptKey(k);
-      else { SU.pasteErr = "剪貼簿裡的內容看起來不是金鑰（應該是一長串英文和數字，沒有空格，也不是網址）。請回到 Google 頁面，重新複製一次。"; setupPaint(); }
+      else { SU.pasteErr = "剪貼簿裡的內容看起來不是金鑰（應該是一長串沒有空格的字，不是網址）。請回到 Google 頁面，重新複製一次。"; setupPaint(); }
     }),
     h("div", { class: "stp", style: "margin-top:18px", text: "貼不上來？" }),
     sp("長按下面這一格，選「貼上」，會自動檢查。"),
@@ -268,43 +183,24 @@ function pgTest() {
   const t = SU.test || { state: "run" };
   if (t.state === "run") return setupFrame("test", "正在測試…", [
     h("div", { class: "spin" }), sp("正在確認金鑰能不能用，請稍等幾秒。")], { noBack: true, noHelp: true });
-  if (t.state === "ok") return setupFrame("test", "✓ 成功了！", [
-    sp("金鑰可以用了。"),
-    t.live ? h("div", { class: "shint", text: t.live }) : null,
-    sbtn("下一步", () => setupGo("home"))], { noBack: true });
+  if (t.state === "ok") {
+    const standalone = window.navigator.standalone === true || (window.matchMedia && matchMedia("(display-mode: standalone)").matches);
+    return setupFrame("test", "✓ 成功了！", [
+      sp("金鑰可以用了，可以開始練英文。第一次打電話時，手機會問「要不要允許使用麥克風」，請按「允許」。"),
+      t.live ? h("div", { class: "shint", text: t.live }) : null,
+      standalone ? null : sp("小提醒：在 Safari 按「分享」→「加入主畫面」，以後像 App 一樣打開，金鑰也比較不會被清掉。"),
+      sbtn("開始練習", () => closeSetup(false)),
+      sbtn("打第一通電話", () => { closeSetup(false); setTimeout(() => { try { showIncoming(); } catch (e) {} }, 200); }, "outline")
+    ], { noBack: true, noHelp: true });
+  }
   const i = t.info;
   return setupFrame("test", i.t, [
     sp(i.hint),
     i.raw ? h("div", { class: "snote", text: "（技術訊息：" + i.raw + "）" }) : null,
     i.paste ? null : sbtn("再試一次", () => setupRunTest()),
-    i.ok ? sbtn("先繼續，稍後再用", () => setupGo("home"), "outline") : null,
+    i.ok ? sbtn("先繼續，稍後再用", () => closeSetup(false), "outline") : null,
     sbtn("重新貼上金鑰", () => setupGo("paste"), i.paste ? "gold" : "outline")
   ]);
-}
-
-function pgHome() {
-  const standalone = window.navigator.standalone === true || (window.matchMedia && matchMedia("(display-mode: standalone)").matches);
-  if (standalone) return setupFrame("home", "已經在主畫面了 ✓", [
-    sp("你現在就是從主畫面開啟的，很好，不用再做。"),
-    sbtn("完成", () => setupGo("done"))], { noBack: true });
-  return setupFrame("home", "加入主畫面（建議）", [
-    sp("加進主畫面後，它會像一般 App 一樣用，而且你的金鑰比較不會被 Safari 清掉。"),
-    sli("1", "在 Safari 畫面最下面（或最上面），點「分享」圖示（方框加一個向上的箭頭）。"),
-    sli("2", "往下滑，選「加入主畫面」。"),
-    sli("3", "右上角按「加入」。"),
-    sli("4", "以後從主畫面的圖示打開它。"),
-    sbtn("我加好了，下一步", () => setupGo("done")),
-    sbtn("先不要，之後再說", () => setupGo("done"), "outline")
-  ]);
-}
-
-function pgDone() {
-  return setupFrame("done", "全部完成 🎉", [
-    sp("可以開始練英文了。第一次打電話時，iPhone 會問「要不要允許使用麥克風」，請按「允許」。"),
-    sp("之後想換金鑰，可以到「系統」頁，按「如何申請 key？」。"),
-    sbtn("開始練習", () => { closeSetup(false); }),
-    sbtn("打第一通電話", () => { closeSetup(false); setTimeout(() => { try { showIncoming(); } catch (e) {} }, 200); }, "outline")
-  ], { noBack: true, noHelp: true, noCount: true });
 }
 
 // ---------------------------------------------------------------- "I'm stuck"
@@ -324,7 +220,8 @@ function showSetupHelp() {
 // ---------------------------------------------------------------- coming back from Google's page
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible" || !SU) return;
-  if (["acct-new", "apply", "copy", "paste"].includes(SU.step)) { SU.returned = true; setupPaint(); }
+  if (SU.step === "apply" && SU.opened) { setupGo("paste"); SU.returned = true; setupPaint(); }
+  else if (SU.step === "paste") { SU.returned = true; setupPaint(); }
 });
 
 // ---------------------------------------------------------------- start up: pick up where the person left off

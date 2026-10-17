@@ -1,7 +1,7 @@
 /* AI 來電 練英文 — web version. UI, call flow, settings. */
 "use strict";
 
-const VERSION = "1.4";
+const VERSION = "1.5";
 const refreshMs = () => window.__REFRESH_MS || 300000; // open a fresh connection every ~5 min (long sessions went silent)
 const TEXT_MODELS = ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash"];
 const PAGE_URL = location.origin + location.pathname;

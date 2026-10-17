@@ -76,7 +76,7 @@ function diagCopy() {
     '<rect x="6" y="6" width="288" height="108" rx="14" fill="#121A2E" stroke="#3A4A78"/>' +
     '<text x="20" y="32" fill="#8FA0C4" font-size="13">你的金鑰</text>' +
     '<rect x="16" y="46" width="268" height="40" rx="10" fill="#1A2440" stroke="#232E4D"/>' +
-    '<text x="28" y="72" fill="#EAF0FF" font-size="15" font-family="monospace">AIzaSy••••••••••••••••</text>' +
+    '<text x="28" y="72" fill="#EAF0FF" font-size="15" font-family="monospace">AQ.Ab8R••••••••••••</text>' +
     '<rect x="238" y="52" width="38" height="28" rx="8" fill="#0A0F1E" stroke="#D4AF37"/>' +
     '<rect x="249" y="58" width="12" height="14" rx="2" fill="none" stroke="#D4AF37" stroke-width="2"/>' +
     '<rect x="253" y="62" width="12" height="14" rx="2" fill="#0A0F1E" stroke="#D4AF37" stroke-width="2"/>' +
@@ -181,16 +181,16 @@ function pgApply() {
     sli("2", "第一次進去會出現「條款」，按同意。"),
     sli("3", "找到並按「Create API key」（建立 API 金鑰）。"),
     sli("4", "如果問你要選哪個專案，選「建立新專案」。"),
-    sli("5", "出現一長串 AIza 開頭的字，就成功了。"),
+    sli("5", "出現一長串英文和數字（多半是 AQ. 或 AIza 開頭），就成功了。"),
     diagCreate(),
     sbtn("開啟申請頁", () => { SU.opened = true; window.open(GUIDE_URL, "_blank"); }),
     sbtn("我看到金鑰了，下一步", () => setupGo("copy"), "outline")
-  ], { returnedHint: "歡迎回來！看到那串 AIza 開頭的字了嗎？看到就按「我看到金鑰了，下一步」；還沒有的話，再按「開啟申請頁」。" });
+  ], { returnedHint: "歡迎回來！看到那一長串金鑰了嗎？看到就按「我看到金鑰了，下一步」；還沒有的話，再按「開啟申請頁」。" });
 }
 
 function pgCopy() {
   return setupFrame("copy", "複製金鑰", [
-    sp("金鑰是一長串 AIza 開頭的英文和數字。請把整串複製起來。"),
+    sp("金鑰是一長串英文和數字（多半是 AQ. 或 AIza 開頭，中間可能有一個點）。請把整串複製起來。"),
     diagCopy(),
     sli("1", "按金鑰旁邊的複製圖示（像兩張疊在一起的紙），看到「已複製」就好。"),
     sli("2", "找不到圖示的話：長按那串字，選「拷貝」。"),
@@ -200,9 +200,11 @@ function pgCopy() {
   ], { returnedHint: "歡迎回來！金鑰複製好了就按下面「我複製好了，下一步」。" });
 }
 
-const KEY_RE = /^AIza[0-9A-Za-z_\-]{30,60}$/;
+// Google now issues keys starting with "AQ." (older ones start with "AIza"): do not insist on a prefix, the connection test decides
+const KEY_RE = /^[0-9A-Za-z_.\-]{20,250}$/;
 function takeKey(raw) {
-  const t = String(raw || "").replace(/\s+/g, "");
+  const t = String(raw || "").trim();
+  if (/\s/.test(t)) return "";                 // a sentence or several words is not a key
   if (KEY_RE.test(t)) return t;
   return "";
 }
@@ -218,7 +220,7 @@ function pgPaste() {
       try { t = await navigator.clipboard.readText(); } catch (e) { SU.pasteErr = "沒辦法自動貼上。請改用下面的方法：長按那一格，選「貼上」。"; setupPaint(); return; }
       const k = takeKey(t);
       if (k) acceptKey(k);
-      else { SU.pasteErr = "剪貼簿裡的內容看起來不是金鑰（應該是 AIza 開頭的一長串）。請回到 Google 頁面，重新複製一次。"; setupPaint(); }
+      else { SU.pasteErr = "剪貼簿裡的內容看起來不是金鑰（應該是一長串英文和數字，沒有空格，也不是網址）。請回到 Google 頁面，重新複製一次。"; setupPaint(); }
     }),
     h("div", { class: "stp", style: "margin-top:18px", text: "貼不上來？" }),
     sp("長按下面這一格，選「貼上」，會自動檢查。"),

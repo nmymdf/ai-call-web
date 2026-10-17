@@ -1,4 +1,4 @@
-/* Data ported from the Android app: topics, callers, levels and the system prompt. */
+/* Data ported from the phone app: topics, callers, levels and the system prompt. */
 "use strict";
 
 const TOPICS = [
@@ -427,7 +427,7 @@ ${styleLine}${funnyLow}
 const OPENING_CUE = "(The phone was just answered. Say your opening line now.)";
 const OUTGOING_CUE = "(You just picked up the phone because the user is calling you. Answer now.)";
 
-/** Full prompt for a live call, with the extra live-call rules from the Android app. */
+/** Full prompt for a live call, with the extra live-call rules from the phone app. */
 function livePrompt(topic, style, userName, level, persona, outgoing, speed) {
   const base = systemPrompt(topic, style, userName, level, persona.name, speed);
   const slow = level <= 3
